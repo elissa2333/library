@@ -1,3 +1,8 @@
+/*
+go build tcpForwarding2.go
+
+./tcpForwarding2 -local 1080 -remote 8.8.8.8:2333
+*/
 package main
 
 import (
