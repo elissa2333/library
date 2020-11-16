@@ -1,6 +1,5 @@
 /*
 go build tcpForwarding2.go
-
 ./tcpForwarding2 -local 1080 -remote 8.8.8.8:2333
 */
 package main
@@ -31,7 +30,7 @@ func init() {
 func main() {
 	flag.Parse()
 	local, remote := checkInput(&loc, &rem)
-	forword(local, remote)
+	forward(local, remote)
 }
 
 func checkInput(local *int, remote *string) (locals, remotes string) {
@@ -76,7 +75,7 @@ func checkInput(local *int, remote *string) (locals, remotes string) {
 
 }
 
-func forword(localPort, remoteAddress string) {
+func forward(localPort, remoteAddress string) {
 	lis, err := net.Listen("tcp", ":"+localPort)
 	if err != nil {
 		log.Fatal("端口监听失败 -> ", err)
@@ -85,10 +84,10 @@ func forword(localPort, remoteAddress string) {
 
 	remoteConn, err := net.DialTimeout("tcp", remoteAddress, 2*time.Second)
 	if err != nil {
-		lis.Close()
+		_ = lis.Close()
 		log.Fatal("远程链接建立失败", err)
 	}
-	remoteConn.Close()
+	_ = remoteConn.Close()
 
 	for {
 		localConn, err := lis.Accept()
@@ -96,28 +95,36 @@ func forword(localPort, remoteAddress string) {
 			log.Println(err)
 			continue
 		}
-		go handle(localConn, remoteAddress)
+		go func(conn net.Conn, remoteAddress string) {
+			if err := handle(conn, remoteAddress); err != nil {
+				log.Println(err)
+			}
+
+			_ = localConn.Close()
+		}(localConn, remoteAddress)
 	}
 }
 
-func handle(localConn net.Conn, remoteAddress string) {
-	var wg sync.WaitGroup
-
+func handle(localConn net.Conn, remoteAddress string) error {
 	remoteConn, err := net.DialTimeout("tcp", remoteAddress, 2*time.Second)
 	if err != nil {
-		log.Fatal("远程链接建立失败", err)
+		return err
 	}
+	defer remoteConn.Close()
 
+	var wg sync.WaitGroup
 	wg.Add(2)
 	go func(localOut net.Conn, remoteIn net.Conn) {
 		defer wg.Done()
-		io.Copy(remoteIn, localOut)
-		remoteIn.Close()
+		_, _ = io.Copy(remoteIn, localOut)
+		_ = remoteIn.Close()
 	}(localConn, remoteConn)
 	go func(localIn net.Conn, remoteOut net.Conn) {
 		defer wg.Done()
-		io.Copy(localIn, remoteOut)
-		localIn.Close()
+		_, _ = io.Copy(localIn, remoteOut)
+		_ = localIn.Close()
 	}(localConn, remoteConn)
 	wg.Wait()
+
+	return nil
 }
