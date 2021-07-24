@@ -1,97 +1,97 @@
-/*
-go build tcpForwarding2.go
-./tcpForwarding2 -local 1080 -remote 8.8.8.8:2333
-*/
 package main
 
+//go:generate go run main.go -local 1080 -remote 8.8.8.8:2333
+
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
 
 var (
-	loc int
-	rem string
+	localAddress  string
+	remoteAddress string
+	isCheck       bool
+
+	timeout = 2 * time.Second
 )
 
 func init() {
-	flag.IntVar(&loc, "local", -1, "本地端口号")
-	flag.StringVar(&rem, "remote", "", "远程ip地址和端口号")
+	flag.StringVar(&localAddress, "local", "", "本地端口或地址")
+	flag.StringVar(&remoteAddress, "remote", "", "远程地址")
+	flag.BoolVar(&isCheck, "check", false, "启动时是否进行远程连接建立测试")
 }
 
 func main() {
 	flag.Parse()
-	local, remote := checkInput(&loc, &rem)
-	forward(local, remote)
-}
 
-func checkInput(local *int, remote *string) (locals, remotes string) {
-	if *local == -1 && *remote == "" {
+	if localAddress == "" && remoteAddress == "" {
 		fmt.Println("请输入本地端口,和远程端口")
 		flag.PrintDefaults()
-		os.Exit(0)
+		return
 	}
-	if *local == -1 {
+	if localAddress == "" {
 		fmt.Println("请输入本地端口")
-		os.Exit(0)
-	} else {
-		if *local > 0 && *local < 65535 {
-			locals = strconv.Itoa(*local)
-		}
+		return
 	}
 
-	if *remote == "" {
-		fmt.Println("请输入远程ip地址和端口")
-		os.Exit(0)
-	} else {
-		items := strings.Split(*remote, ":")
-		if items == nil || len(items) != 2 {
-			fmt.Println("输入错误请重新输入,格式类似于 -> 8.8.8.8:53")
-			os.Exit(0)
-		}
-		ip := net.ParseIP(items[0])
-		if ip == nil {
-			fmt.Println("远程ip地址格式错误")
-			os.Exit(0)
-		}
-		remotePort, err := strconv.Atoi(items[1])
-		if err != nil {
-			fmt.Println("远程地址端口错误")
-			os.Exit(0)
-		}
-		if remotePort > 0 && remotePort < 65535 {
-			remotes = ip.String() + ":" + strconv.Itoa(remotePort)
-		}
-	}
-	return locals, remotes
-
-}
-
-func forward(localPort, remoteAddress string) {
-	lis, err := net.Listen("tcp", ":"+localPort)
+	localhost, localPort, err := net.SplitHostPort(localAddress)
 	if err != nil {
-		log.Fatal("端口监听失败 -> ", err)
+		_, errConv := strconv.Atoi(localAddress)
+		if errConv != nil {
+			fmt.Println("远程地址错误请重新输入，格式类似于 -> 8000")
+			return
+		}
+		localPort = localAddress
+	}
+	if localhost == "" {
+		localhost = "127.0.0.1"
+	}
+
+	localAddress = net.JoinHostPort(localhost, localPort)
+
+	if remoteAddress == "" {
+		fmt.Println("请输入远程ip地址和端口")
+		return
+	}
+	remoteHOST, remotePort, err := net.SplitHostPort(remoteAddress)
+	if remoteHOST == "" || remotePort == "" || err != nil {
+		fmt.Println("远程地址错误请重新输入，格式类似于 -> 8.8.8.8:53")
+		return
+	}
+
+	lis, err := net.Listen("tcp", localAddress)
+	if err != nil {
+		fmt.Printf("本地监听失败: %s\n", err)
+		return
 	}
 	defer lis.Close()
 
-	remoteConn, err := net.DialTimeout("tcp", remoteAddress, 2*time.Second)
-	if err != nil {
-		_ = lis.Close()
-		log.Fatal("远程链接建立失败", err)
+	if isCheck {
+		remoteConn, err := net.DialTimeout("tcp", remoteAddress, timeout)
+		if err != nil {
+			fmt.Printf("远程链接建立失败: %s\n", err)
+			return
+		}
+		_ = remoteConn.Close()
 	}
-	_ = remoteConn.Close()
+
+	fmt.Printf("转发服务启动\n\n本机地址 %s 为远程 %s 的映射\n", localAddress, remoteAddress)
 
 	for {
 		localConn, err := lis.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				fmt.Println("本机监听服务关闭")
+				return
+			}
+
 			log.Println(err)
 			continue
 		}
@@ -106,7 +106,7 @@ func forward(localPort, remoteAddress string) {
 }
 
 func handle(localConn net.Conn, remoteAddress string) error {
-	remoteConn, err := net.DialTimeout("tcp", remoteAddress, 2*time.Second)
+	remoteConn, err := net.DialTimeout("tcp", remoteAddress, timeout)
 	if err != nil {
 		return err
 	}
